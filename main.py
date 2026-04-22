@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import sqlite3
+from kbo_situational_crawler import KBOSituationalMiner
 
 app = FastAPI()
 
@@ -56,3 +58,52 @@ def read_roster(team: str):
     players = cursor.fetchall()
     conn.close()
     return [dict(player) for player in players]
+
+class LineupRequest(BaseModel):
+    pitcher_name: str
+    batter_names: list[str]
+
+@app.post("/api/simulate")
+async def run_simulation(request: LineupRequest):
+    print(f"🔥 라인업 확정됨! 실시간 디테일 크롤링 시작...")
+    
+    # 1. 상황별 데이터 실시간 크롤링 및 DB 저장
+    miner = KBOSituationalMiner()
+    # 타자들의 디테일 데이터를 긁고 결과를 받아옴 (투수도 필요하다면 추후 로직 추가)
+    situational_results = miner.process_lineup(request.batter_names)
+    miner.close()
+    
+    print("✅ 크롤링 및 DB 저장 완료. 결과를 클라이언트로 전송합니다.")
+
+    # 2. React로 결과 반환
+    # 나중에는 여기에 situational_results를 바탕으로 Log5 확률 계산 로직이 들어갑니다.
+    return {
+        "message": "시뮬레이션 데이터 준비 완료",
+        "pitcher": request.pitcher_name,
+        "matchup_details": situational_results
+    }
+
+@app.post("/api/lineup/confirm")
+async def confirm_lineup(request: LineupRequest):
+    print(f"🚀 라인업 확정 요청 수신: 투수-{request.pitcher_name}, 타자-{len(request.batter_names)}명")
+    
+    # 크롤러 가동
+    miner = KBOSituationalMiner()
+    try:
+        # 1. 투수 상세 데이터 크롤링 (팀명 정보가 필요하므로 프론트에서 같이 보내주면 좋습니다)
+        # 우선 이름으로 ID를 찾는 로직이 내부에 있어야 합니다.
+        p_id = miner.get_player_id(request.pitcher_name)
+        if p_id:
+            miner.crawl_player(p_id, is_pitcher=True)
+
+        # 2. 타자 1~9번 상세 데이터 크롤링
+        for b_name in request.batter_names:
+            b_id = miner.get_player_id(b_name)
+            if b_id:
+                miner.crawl_player(b_id, is_pitcher=False)
+            
+        return {"status": "success", "message": "상세 데이터 동기화 완료!"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+    finally:
+        miner.close()

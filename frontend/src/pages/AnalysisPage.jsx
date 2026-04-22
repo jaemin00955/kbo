@@ -11,6 +11,29 @@ const AnalysisPage = () => {
   const [gameInfo, setGameInfo] = useState(null);
   const [awayRoster, setAwayRoster] = useState([]);
   const [homeRoster, setHomeRoster] = useState([]);
+  const [isCrawling, setIsCrawling] = useState(false);
+
+  const handleLineupConfirm = async () => {
+    setIsCrawling(true);
+    try {
+        // 주소가 http://localhost:8000 인지 확인하세요!
+        const response = await fetch('http://localhost:8000/api/lineup/confirm', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pitcher_name: selectedPitcher.name,
+                batter_names: selectedBatters.map(b => b.name)
+            }),
+        });
+        const data = await response.json();
+        alert(data.message); // "상세 데이터 동기화 완료!" 알림이 떠야 합니다.
+    } catch (error) {
+        console.error("연결 에러:", error);
+    } finally {
+        setIsCrawling(false);
+    }
+};
+
   
   // 양 팀 라인업 동시 관리
   const [lineups, setLineups] = useState({
@@ -46,7 +69,10 @@ const AnalysisPage = () => {
     }));
   };
 
+  
+
   if (!gameInfo) return <div style={{padding: '50px', textAlign: 'center'}}>로딩 중...</div>;
+
 
   return (
     <div style={styles.container}>
@@ -121,6 +147,13 @@ const AnalysisPage = () => {
                   })}
                 </tbody>
               </table>
+              <button 
+    onClick={handleLineupConfirm}
+    disabled={isCrawling}
+    className="lineup-confirm-btn"
+>
+    {isCrawling ? "데이터 수집 중..." : "라인업 확정 (상세 스탯 동기화)"}
+</button>
             </div>
           );
         })}
