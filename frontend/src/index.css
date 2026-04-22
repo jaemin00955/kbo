@@ -1,0 +1,112 @@
+:root {
+  /* --- 기존 기본 변수 --- */
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #fff;
+  --border: #e5e4e7;
+  --code-bg: #f4f3ec;
+  --accent: #aa3bff;
+  --accent-bg: rgba(170, 59, 255, 0.1);
+  --accent-border: rgba(170, 59, 255, 0.5);
+  --social-bg: rgba(244, 243, 236, 0.5);
+  --shadow: rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+
+  /* --- ⚾ KBO 앱 전용 변수 (기본 라이트모드) --- */
+  --kbo-blue: #00a8f3; 
+  --kbo-badge-bg: #e1f5fe;
+  --bg-gray: #f4f5f7;
+  --text-primary: #333333;
+  --text-secondary: #999999;
+  --card-bg: #ffffff;
+
+  /* --- 폰트 및 기본 렌더링 설정 --- */
+  --sans: 'Pretendard', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --heading: 'Pretendard', system-ui, 'Segoe UI', Roboto, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font: 18px/145% var(--sans);
+  letter-spacing: 0.18px;
+  color-scheme: light dark;
+  
+  /* body 배경과 기본 글씨색을 야구 앱 스타일로 덮어씌움 */
+  color: var(--text-primary);
+  background: var(--bg-gray); 
+  
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+/* --- 다크모드 대응 --- */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --text: #9ca3af;
+    --text-h: #f3f4f6;
+    --bg: #16171d;
+    --border: #2e303a;
+    --code-bg: #1f2028;
+    --accent: #c084fc;
+    --accent-bg: rgba(192, 132, 252, 0.15);
+    --accent-border: rgba(192, 132, 252, 0.5);
+    --social-bg: rgba(47, 48, 58, 0.5);
+    --shadow: rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
+
+    /* ⚾ KBO 앱 다크모드 색상 (밤에 봐도 눈 안 아프게) */
+    --kbo-blue: #008ecc; /* 약간 더 차분한 파란색 */
+    --kbo-badge-bg: #1e3a5f; /* 어두운 남색 배경 */
+    --bg-gray: #121212; /* 완전 어두운 배경 */
+    --text-primary: #f0f0f0; /* 밝은 회백색 글씨 */
+    --text-secondary: #aaaaaa;
+    --card-bg: #1e1e1e; /* 카드 배경도 어둡게 */
+  }
+
+  #social .button-icon {
+    filter: invert(1) brightness(2);
+  }
+}
+
+/* --- 기본 태그 스타일링 --- */
+body {
+  margin: 0;
+}
+
+#root {
+  /* 기존 템플릿의 틀 유지 */
+  width: 1200px; /* 데스크탑에서 시원하게 보이도록 확장 */
+  max-width: 100%;
+  margin: 0 auto;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding: 0 20px; /* 모바일에서 좌우 여백 확보 */
+}
+
+/* (기존 h1, h2, code 등의 설정은 그대로 유지하셔도 무방합니다) */
+h1, h2 {
+  font-family: var(--heading);
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 56px;
+  letter-spacing: -1.68px;
+  margin: 32px 0;
+  @media (max-width: 1024px) { font-size: 36px; margin: 20px 0; }
+}
+
+h2 {
+  font-size: 24px;
+  line-height: 118%;
+  letter-spacing: -0.24px;
+  margin: 0 0 8px;
+  @media (max-width: 1024px) { font-size: 20px; }
+}
+
+p { margin: 0; }
