@@ -10,21 +10,25 @@ from bs4 import BeautifulSoup
 class KBOSituationalMiner:
     def __init__(self):
         self.options = Options()
-        self.options.add_argument("--headless") # 화면 없이 실행
+        self.options.add_argument("--headless") # 백그라운드 실행
         self.driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=self.options)
         self.conn = sqlite3.connect('kbo_data.db')
         self.cursor = self.conn.cursor()
         self._setup_table()
 
     def _setup_table(self):
-        # 상황별 데이터를 통합 저장할 테이블 (타자/투수 공용)
+        # 기존 테이블을 날리고 타자/투수 통합 테이블로 새로 생성합니다.
+        self.cursor.execute('DROP TABLE IF EXISTS situational_stats')
         self.cursor.execute('''
-            CREATE TABLE IF NOT EXISTS situational_stats (
+            CREATE TABLE situational_stats (
                 player_id TEXT,
                 player_name TEXT,
-                category TEXT,      -- '투수유형별', '주자상황별', '최근10경기', '이닝별' 등
-                sub_category TEXT,  -- '좌투수', '득점권', '합계', '1회' 등
-                AVG REAL, PA INTEGER, AB INTEGER, H INTEGER, HR INTEGER, BB INTEGER, SO INTEGER,
+                player_type TEXT,    -- 'Hitter' or 'Pitcher'
+                category TEXT,       -- '최근 10경기', '상대팀별', '주자상황별' 등
+                sub_category TEXT,   -- '합계', '좌투수', '득점권', '잠실' 등
+                AVG REAL, PA INTEGER, AB INTEGER,       -- 타자용 스탯 (투수는 피안타율)
+                ERA REAL, IP TEXT, TBF INTEGER,         -- 투수용 스탯 (평균자책점, 이닝, 타자수)
+                H INTEGER, HR INTEGER, BB INTEGER, SO INTEGER, -- 공통 스탯
                 last_updated TEXT,
                 PRIMARY KEY (player_id, category, sub_category)
             )
@@ -32,60 +36,134 @@ class KBOSituationalMiner:
         self.conn.commit()
 
     def get_player_id(self, name, team):
-        # 기존 batter_stats나 pitcher_stats에서 ID 조회
+        # 타자 테이블에서 찾기
         self.cursor.execute("SELECT player_id FROM batter_stats WHERE name=? AND team=?", (name, team))
         res = self.cursor.fetchone()
-        if not res:
-            self.cursor.execute("SELECT player_id FROM pitcher_stats WHERE name=? AND team=?", (name, team))
-            res = self.cursor.fetchone()
-        return res[0] if res else None
+        if res: return res[0], 'Hitter'
+        
+        # 투수 테이블에서 찾기
+        self.cursor.execute("SELECT player_id FROM pitcher_stats WHERE name=? AND team=?", (name, team))
+        res = self.cursor.fetchone()
+        if res: return res[0], 'Pitcher'
+        
+        return None, None
 
-    def extract_table_data(self, soup, title_text, is_tfoot=False):
-        header = soup.find(lambda tag: tag.name in ['h5', 'h6', 'div'] and title_text in tag.text)
-        if not header: return []
-        table_div = header.find_next_sibling("div", class_="tbl-type02")
-        if not table_div: return []
-        table = table_div.find("table")
-        
-        headers = [th.text.strip() for th in table.find("thead").find_all("th")]
-        rows = table.find("tfoot").find_all("tr") if is_tfoot else table.find("tbody").find_all("tr")
-        
+    def safe_float(self, val):
+        try: return float(val.replace('-', '0').strip())
+        except: return 0.0
+
+    def safe_int(self, val):
+        try: return int(val.replace('-', '0').strip())
+        except: return 0
+
+    def extract_table(self, soup, keyword, is_tfoot=False):
+        """colspan을 동적으로 계산하여 타자/투수 상관없이 정확히 컬럼을 매핑합니다."""
+        table = soup.find('table', {'summary': lambda x: x and keyword in x})
+        if not table:
+            # h5, h6 등의 제목으로 탐색
+            h_tag = soup.find(lambda tag: tag.name in ['h5', 'h6', 'div'] and keyword in tag.text)
+            if h_tag:
+                table_div = h_tag.find_next_sibling('div', class_='tbl-type02')
+                if table_div: table = table_div.find('table')
+        if not table: return []
+
+        thead = table.find('thead')
+        if not thead: return []
+        headers = [th.text.strip() for th in thead.find_all('th')]
+
+        target_rows = []
+        if is_tfoot and table.find('tfoot'):
+            target_rows = table.find('tfoot').find_all('tr')
+        elif not is_tfoot and table.find('tbody'):
+            target_rows = table.find('tbody').find_all('tr')
+
         results = []
-        for row in rows:
-            cols = row.find_all(["td", "th"])
-            if len(cols) < 5 or cols[0].text.strip() == "-": continue
-            row_data = {"sub_category": cols[0].text.strip()}
-            for i, col in enumerate(cols):
-                if i == 0: continue
-                val = col.text.strip().replace('-', '0')
-                row_data[headers[i]] = val
+        for row in target_rows:
+            cols = row.find_all(['th', 'td'])
+            if not cols: continue
+            
+            sub_cat = cols[0].text.strip()
+            if sub_cat in ["-", "기록이 없습니다."]: continue
+
+            # 💡 [핵심 로직] 합계 부분의 colspan 값(타자:2, 투수:3)을 추출하여 헤더 인덱스를 보정합니다.
+            col_offset = 0
+            if cols[0].has_attr('colspan'):
+                col_offset = int(cols[0]['colspan']) - 1
+
+            row_data = {"sub_category": sub_cat if not is_tfoot else "합계"}
+            
+            col_idx = 1
+            head_idx = 1 + col_offset
+            
+            # 남은 컬럼들을 헤더와 1:1로 매칭
+            while col_idx < len(cols) and head_idx < len(headers):
+                h_name = headers[head_idx]
+                row_data[h_name] = cols[col_idx].text.strip()
+                
+                # 혹시 현재 데이터 셀도 colspan이 있다면 헤더 인덱스를 더 뜀
+                if cols[col_idx].has_attr('colspan'):
+                    head_idx += int(cols[col_idx]['colspan'])
+                else:
+                    head_idx += 1
+                col_idx += 1
+                    
             results.append(row_data)
         return results
 
-    def crawl_player(self, player_id, is_pitcher=False):
-        type_path = "PitcherDetail" if is_pitcher else "HitterDetail"
-        url = f"https://www.koreabaseball.com/Record/Player/{type_path}/Basic.aspx?playerId={player_id}"
-        self.driver.get(url)
-        time.sleep(1)
+    def crawl_player(self, p_id, p_name, p_type):
+        base_url = "https://www.koreabaseball.com/Record/Player/"
+        path = "PitcherDetail" if p_type == 'Pitcher' else "HitterDetail"
+        
+        # 1. 기본 탭 (최근 10경기)
+        self.driver.get(f"{base_url}{path}/Basic.aspx?playerId={p_id}")
+        time.sleep(0.5)
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+        self.save_to_db(p_id, p_name, p_type, "최근 10경기", self.extract_table(soup, "최근 10경기", is_tfoot=True))
 
-        # 크롤링할 카테고리 정의
-        tasks = [
-            ("최근 10경기", True), 
-            ("주자상황별", False),
-            ("구장별", False)
-        ]
-        tasks.append(("타자유형별" if is_pitcher else "투수유형별", False))
-        if is_pitcher: tasks.append(("이닝별", False))
+        # 2. 경기별 기록 탭 (상대팀별, 구장별, 홈/방문별)
+        self.driver.get(f"{base_url}{path}/Matchup.aspx?playerId={p_id}")
+        time.sleep(0.5)
+        soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+        self.save_to_db(p_id, p_name, p_type, "상대팀별", self.extract_table(soup, "상대팀별"))
+        self.save_to_db(p_id, p_name, p_type, "구장별", self.extract_table(soup, "구장별"))
+        self.save_to_db(p_id, p_name, p_type, "홈/방문별", self.extract_table(soup, "홈/방문별"))
 
-        for title, is_foot in tasks:
-            data_list = self.extract_table_data(soup, title, is_foot)
-            for data in data_list:
-                sql = '''INSERT INTO situational_stats VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                         ON CONFLICT(player_id, category, sub_category) DO UPDATE SET AVG=excluded.AVG, PA=excluded.PA, H=excluded.H'''
-                # 실제 데이터 매핑 및 저장 로직 (생략된 세부 컬럼은 파싱 데이터에 따름)
-                self.cursor.execute("INSERT OR REPLACE INTO situational_stats (player_id, category, sub_category, AVG, last_updated) VALUES (?, ?, ?, ?, ?)", 
-                                    (player_id, title, data['sub_category'], data.get('AVG', 0), datetime.now().strftime("%Y-%m-%d")))
+        # 3. 상황별 기록 탭 (주자상황별, 이닝별, 아웃카운트별, 투수/타자유형별)
+        self.driver.get(f"{base_url}{path}/Situation.aspx?playerId={p_id}")
+        time.sleep(0.5)
+        soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+        self.save_to_db(p_id, p_name, p_type, "주자상황별", self.extract_table(soup, "주자상황별"))
+        self.save_to_db(p_id, p_name, p_type, "이닝별", self.extract_table(soup, "이닝별"))
+        self.save_to_db(p_id, p_name, p_type, "아웃카운트별", self.extract_table(soup, "아웃카운트별"))
+        
+        # 타자는 투수유형별 / 투수는 타자유형별
+        vs_type = "타자유형별" if p_type == 'Pitcher' else "투수유형별"
+        self.save_to_db(p_id, p_name, p_type, vs_type, self.extract_table(soup, vs_type))
+
+    def save_to_db(self, p_id, p_name, p_type, category, data_list):
+        for d in data_list:
+            if not d: continue
+            
+            # get을 통해 가져오되, 값이 없으면 0으로 기본값 세팅
+            avg = self.safe_float(d.get('AVG', '0'))
+            era = self.safe_float(d.get('ERA', '0'))
+            pa  = self.safe_int(d.get('PA', '0'))
+            ab  = self.safe_int(d.get('AB', '0'))
+            tbf = self.safe_int(d.get('TBF', '0'))
+            ip  = d.get('IP', '0').replace('-', '0') # 이닝은 텍스트 그대로
+            h   = self.safe_int(d.get('H', '0'))
+            hr  = self.safe_int(d.get('HR', '0'))
+            bb  = self.safe_int(d.get('BB', '0'))
+            so  = self.safe_int(d.get('SO', '0'))
+
+            sql = '''
+                INSERT INTO situational_stats 
+                (player_id, player_name, player_type, category, sub_category, AVG, PA, AB, ERA, IP, TBF, H, HR, BB, SO, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(player_id, category, sub_category) DO UPDATE SET 
+                AVG=excluded.AVG, PA=excluded.PA, AB=excluded.AB, ERA=excluded.ERA, IP=excluded.IP, TBF=excluded.TBF, H=excluded.H, HR=excluded.HR, BB=excluded.BB, SO=excluded.SO, last_updated=excluded.last_updated
+            '''
+            self.cursor.execute(sql, (p_id, p_name, p_type, category, d['sub_category'], avg, pa, ab, era, ip, tbf, h, hr, bb, so, datetime.now().strftime("%Y-%m-%d")))
         self.conn.commit()
 
     def close(self):
