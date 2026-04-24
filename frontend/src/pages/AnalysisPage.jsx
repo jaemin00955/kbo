@@ -12,10 +12,8 @@ const AnalysisPage = () => {
   const [awayRoster, setAwayRoster] = useState([]);
   const [homeRoster, setHomeRoster] = useState([]);
   
-  // 💡 각 팀별 크롤링 진행 상태 관리 ('idle', 'crawling', 'completed', 'error')
   const [crawlStatus, setCrawlStatus] = useState({ away: 'idle', home: 'idle' });
 
-  // 💡 테스트를 위해 초기 데이터를 미리 채워둠 (한화 vs LG 예시)
   const [lineups, setLineups] = useState({
     away: { 1: { pos: '중견수(CF)', name: '이진영' }, 2: { pos: '우익수(RF)', name: '페라자' }, 3: { pos: '3루수(3B)', name: '노시환' }, 4: { pos: '1루수(1B)', name: '채은성' }, 5: { pos: '지명타자(DH)', name: '안치홍' }, 6: { pos: '2루수(2B)', name: '문현빈' }, 7: { pos: '유격수(SS)', name: '이도윤' }, 8: { pos: '포수(C)', name: '최재훈' }, 9: { pos: '좌익수(LF)', name: '최인호' }, 'P': { pos: '투수(P)', name: '류현진' } },
     home: { 1: { pos: '우익수(RF)', name: '홍창기' }, 2: { pos: '중견수(CF)', name: '박해민' }, 3: { pos: '1루수(1B)', name: '오스틴' }, 4: { pos: '3루수(3B)', name: '문보경' }, 5: { pos: '유격수(SS)', name: '오지환' }, 6: { pos: '지명타자(DH)', name: '김현수' }, 7: { pos: '좌익수(LF)', name: '문성주' }, 8: { pos: '포수(C)', name: '박동원' }, 9: { pos: '2루수(2B)', name: '신민재' }, 'P': { pos: '투수(P)', name: '임찬규' } }
@@ -44,30 +42,44 @@ const AnalysisPage = () => {
     }));
   };
 
-  // 💡 특정 팀의 버튼을 눌렀을 때 실행되는 함수
+  // 💡 백엔드로 ID와 이름을 함께 넘겨주기 위한 핵심 로직
   const handleLineupConfirm = async (side, teamName) => {
     setCrawlStatus(prev => ({ ...prev, [side]: 'crawling' }));
     
-    // 해당 팀의 라인업 객체에서 투수와 타자 이름 추출
     const teamLineup = lineups[side];
+    const currentRoster = side === 'away' ? awayRoster : homeRoster;
+
+    // 로스터에서 이름으로 ID 찾기
+    const getPlayerId = (name) => {
+        const player = currentRoster.find(p => p.name === name);
+        return player ? String(player.id) : ""; 
+    };
+
     const pitcherName = teamLineup['P'].name;
-    const batterNames = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(o => teamLineup[o].name).filter(n => n !== '');
+    const pitcherId = getPlayerId(pitcherName);
+
+    const battersInfo = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
+        .map(order => {
+            const bName = teamLineup[order].name;
+            return { name: bName, id: getPlayerId(bName) };
+        })
+        .filter(b => b.name !== '');
 
     try {
         const response = await fetch('http://localhost:8000/api/lineup/confirm', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                team_name: teamName,           // 백엔드에서 ID를 정확히 찾기 위해 팀명 추가
-                pitcher_name: pitcherName,
-                batter_names: batterNames
+                team_name: teamName,
+                pitcher: { name: pitcherName, id: pitcherId },
+                batters: battersInfo
             }),
         });
         const data = await response.json();
         
         if (data.status === 'success') {
-            setCrawlStatus(prev => ({ ...prev, [side]: 'completed' })); // 상태 완료로 변경
-            alert(`${teamName} 라인업 스탯 동기화 완료!`);
+            setCrawlStatus(prev => ({ ...prev, [side]: 'completed' }));
+            alert(`${teamName} 라인업 10명 실시간 데이터 스캔 완료!`);
         } else {
             setCrawlStatus(prev => ({ ...prev, [side]: 'error' }));
             alert(`오류 발생: ${data.message}`);
@@ -86,6 +98,7 @@ const AnalysisPage = () => {
       <header style={styles.mainHeader}>
         <button onClick={() => navigate(-1)} style={styles.backBtn}>&larr; 일정</button>
         <h1 style={styles.title}>{gameInfo.away_team} vs {gameInfo.home_team} 상세 분석</h1>
+        <h1 style={styles.title}> 구장 : {gameInfo.stadium} </h1>
       </header>
 
       <div style={styles.dualLayout}>
@@ -94,7 +107,6 @@ const AnalysisPage = () => {
           const currentRoster = side === 'away' ? awayRoster : homeRoster;
           const teamTheme = teamName === '한화' ? '#ff6600' : teamName === 'LG' ? '#c0004c' : '#00a8f3';
           
-          // 버튼 상태에 따른 렌더링 설정
           const isCrawling = crawlStatus[side] === 'crawling';
           const isCompleted = crawlStatus[side] === 'completed';
 
@@ -128,7 +140,6 @@ const AnalysisPage = () => {
                         <td style={styles.td}>
                           <select value={lineups[side][order].name} onChange={(e) => handleLineupChange(side, order, 'name', e.target.value)} style={styles.selectName}>
                             <option value="">선수 선택</option>
-                            {/* 테스트용으로 DB에 없는 이름도 렌더링되도록 임시 추가된 값을 보여줍니다 */}
                             {lineups[side][order].name && !availablePlayers.find(p => p.name === lineups[side][order].name) && (
                                 <option value={lineups[side][order].name}>{lineups[side][order].name} (테스트)</option>
                             )}
@@ -142,19 +153,19 @@ const AnalysisPage = () => {
                   })}
                 </tbody>
               </table>
-              
-              {/* 팀별 라인업 확정 버튼 */}
+
               <div style={{ padding: '15px', textAlign: 'center', backgroundColor: '#f9f9f9' }}>
                   <button 
                       onClick={() => handleLineupConfirm(side, teamName)}
                       disabled={isCrawling || isCompleted}
                       style={{
-                          width: '100%', padding: '12px', fontSize: '16px', fontWeight: 'bold', border: 'none', borderRadius: '6px', cursor: (isCrawling || isCompleted) ? 'not-allowed' : 'pointer',
+                          width: '100%', padding: '14px', fontSize: '16px', fontWeight: 'bold', border: 'none', borderRadius: '6px', 
+                          cursor: (isCrawling || isCompleted) ? 'not-allowed' : 'pointer',
                           backgroundColor: isCompleted ? '#4CAF50' : (isCrawling ? '#ccc' : teamTheme),
                           color: '#fff'
                       }}
                   >
-                      {isCrawling ? "상황별 스탯 크롤링 중 (약 15초)..." : isCompleted ? "상세 데이터 장전 완료 ✅" : `${teamName} 라인업 확정`}
+                      {isCrawling ? "⚡ 10명 동시 실시간 스캔 중 (약 2초)..." : isCompleted ? "데이터 장전 완료 ✅" : `${teamName} 라인업 확정`}
                   </button>
               </div>
             </div>
@@ -169,7 +180,7 @@ const styles = {
   container: { maxWidth: '1200px', margin: '0 auto', padding: '20px' },
   mainHeader: { display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '30px' },
   backBtn: { padding: '8px 16px', border: '1px solid #ddd', borderRadius: '6px', cursor: 'pointer' },
-  title: { fontSize: '28px', color: '#222', margin: 0 },
+  title: { fontSize: '28px', color: '#fff', margin: 0 },
   dualLayout: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px' },
   teamSection: { backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', overflow: 'hidden' },
   teamHeader: { padding: '20px', textAlign: 'center', backgroundColor: '#fcfcfc', borderBottom: '1px solid #eee' },
